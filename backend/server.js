@@ -65,6 +65,16 @@ const validateAllAPIs = () => {
     return apis;
 };
 
+function logSummaryType(summary, source = 'unknown') {
+    if (summary.includes('Strong indicators') || summary.includes('High confidence')) {
+        console.log(`📝 Intelligent summary from ${source}: ${summary.substring(0, 80)}...`);
+    } else if (summary.startsWith('Content preview:')) {
+        console.log(`📄 Fallback content preview from ${source}`);
+    } else {
+        console.log(`📋 Standard summary from ${source}: ${summary.substring(0, 80)}...`);
+    }
+}
+
 // Enhanced Serper Search function
 async function searchWithSerper(query, maxResults = 5) {
     try {
@@ -210,7 +220,7 @@ Format: VERDICT: [Credible/Not Credible] | CONFIDENCE: [0-100]% | REASON: [brief
                 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            timeout: 15000
+            timeout: 20000
         });
 
         openaiCallCount++;
@@ -714,19 +724,79 @@ async function extractTextFromUrl(url) {
 }
 
 // Helper function to generate summary
-function generateSummary(content) {
-    const sentences = content
-        .split(/[.!?]+/)
-        .map(s => s.trim())
-        .filter(s => s.length > 20 && s.length < 200)
-        .filter(s => !s.match(/^(Advertisement|Sponsored|By |Follow |Share |Read more)/i));
-    
-    const topSentences = sentences.slice(0, 3);
-    return topSentences.length > 0 
-        ? topSentences.join('. ') + '.'
-        : 'Summary not available for this content.';
-}
+function generateSummary(analysisResult, title, content) {
+    if (!analysisResult) {
+        return "Analysis could not be completed. Manual verification recommended.";
+    }
 
+    const { label, confidence, reasoning } = analysisResult;
+    const isCredible = label === 'Trustworthy' || label === 'Real';
+    
+    // Analyze content patterns for summary generation
+    const contentLower = (content + ' ' + title).toLowerCase();
+    
+    // Detection patterns
+    const hasOfficialSources = /official|announced|government|ministry|statement|confirmed|according to sources/.test(contentLower);
+    const hasNewsAgencies = /reuters|associated press|pti|ani|news agency/.test(contentLower);
+    const hasClickbait = /shocking|unbelievable|you won't believe|secret|exposed/.test(contentLower);
+    const hasConspiracy = /conspiracy|hidden truth|cover.?up|they don't want/.test(contentLower);
+    const hasEmotionalWords = /devastating|outrageous|incredible|bombshell/.test(contentLower);
+    const hasPoorStructure = content.split('.').length < 3 || content.length < 100;
+    
+    let summary = "";
+    
+    if (isCredible) {
+        // TRUSTWORTHY content summary
+        if (confidence >= 80) {
+            summary = "High confidence in content authenticity. ";
+        } else if (confidence >= 65) {
+            summary = "Good confidence in content reliability. ";
+        } else {
+            summary = "Moderate confidence in content trustworthiness. ";
+        }
+        
+        // Add specific positive indicators
+        const positives = [];
+        if (hasOfficialSources) positives.push("official source references");
+        if (hasNewsAgencies) positives.push("established news agencies cited");
+        if (!hasClickbait) positives.push("professional language patterns");
+        if (!hasConspiracy) positives.push("factual reporting style");
+        if (!hasPoorStructure) positives.push("well-structured content");
+        
+        if (positives.length > 0) {
+            summary += `Supporting factors: ${positives.join(', ')}.`;
+        } else {
+            summary += "Content follows standard journalistic patterns.";
+        }
+        
+    } else {
+        // UNTRUSTWORTHY content summary
+        if (confidence >= 80) {
+            summary = "High confidence this content is misleading. ";
+        } else if (confidence >= 65) {
+            summary = "Strong indicators of unreliable information. ";
+        } else {
+            summary = "Multiple concerns about content authenticity. ";
+        }
+        
+        // Add specific red flags
+        const concerns = [];
+        if (hasClickbait) concerns.push("sensationalist language patterns");
+        if (hasConspiracy) concerns.push("conspiracy-related terminology");
+        if (!hasOfficialSources) concerns.push("lack of authoritative sources");
+        if (hasEmotionalWords) concerns.push("manipulative emotional language");
+        if (hasPoorStructure) concerns.push("poor content structure");
+        
+        if (concerns.length > 0) {
+            summary += `Key issues: ${concerns.join(', ')}.`;
+        } else {
+            summary += "Overall content pattern raises reliability concerns.";
+        }
+        
+        summary += " Recommendation: Cross-reference with trusted sources before sharing.";
+    }
+    
+    return summary;
 function generateVerificationReasoning(trustedCount, totalCount) {
     const percentage = Math.round((trustedCount / Math.max(totalCount, 1)) * 100);
     
@@ -739,6 +809,7 @@ function generateVerificationReasoning(trustedCount, totalCount) {
     } else {
         return 'No verification sources found through web search';
     }
+}
 }
 
 // ENHANCED ROUTES
@@ -850,43 +921,45 @@ app.post('/api/analyze', async (req, res) => {
                 title: analysisData.title,
                 content: analysisData.content
             }, {
-                timeout: 45000 // Longer timeout for comprehensive analysis
+                timeout: 45000
             });
             
             if (pythonResponse.data.success) {
                 pythonAnalysis = pythonResponse.data.analysis;
                 console.log(`✅ Python service: ${pythonAnalysis.label} (${pythonAnalysis.confidence}%)`);
                 console.log(`🎯 Used ${pythonAnalysis.ensemble_details?.api_models_used || 0} APIs + ${pythonAnalysis.ensemble_details?.local_models_used || 0} local models`);
+                
+                // IMPORTANT: Check if Python service provided an intelligent summary
+                if (pythonAnalysis.summary && pythonAnalysis.summary.length > 50) {
+                    console.log(`📝 Using intelligent summary from Python service: ${pythonAnalysis.summary.substring(0, 100)}...`);
+                }
             }
         } catch (pythonError) {
             console.error('❌ Python service error:', pythonError.message);
         }
         
-        // BACKUP: Direct API calls if Python service fails
+        // BACKUP: Direct API calls if Python service fails (keep existing backup logic)
         let backupAnalyses = [];
         if (!pythonAnalysis) {
             console.log('🔄 Python service unavailable, using backup direct API calls...');
             
-            // Try OpenAI directly
             const openaiResult = await callOpenAIDirectly(analysisData.title, analysisData.content);
             if (openaiResult.success) {
                 backupAnalyses.push(openaiResult.analysis);
             }
             
-            // Try Groq directly
             const groqResult = await callGroqDirectly(analysisData.title, analysisData.content);
             if (groqResult.success) {
                 backupAnalyses.push(groqResult.analysis);
             }
-            // Try LLaMA directly
+            
             const llamaResult = await analyzeWithLLaMAComprehensive(analysisData.title, analysisData.content);
             if (llamaResult) {
                 backupAnalyses.push(llamaResult.analysis);
             }
-}
+        }
         
-        
-        // Enhanced trusted source and government content adjustment
+        // Enhanced trusted source and government content adjustment (keep existing logic)
         const trustedSources = [
             'timesofindia.indiatimes.com', 'economictimes.indiatimes.com', 
             'hindustantimes.com', 'thehindu.com', 'indianexpress.com', 
@@ -904,7 +977,7 @@ app.post('/api/analyze', async (req, res) => {
         if (pythonAnalysis) {
             finalAnalysis = pythonAnalysis;
             
-            // Apply trusted source adjustments
+            // Apply trusted source adjustments (keep existing logic)
             if (isFromTrustedSource && finalAnalysis.confidence > 75 && finalAnalysis.label === 'Untrustworthy') {
                 if (hasGovernmentContent) {
                     finalAnalysis.confidence = Math.min(finalAnalysis.confidence, 60);
@@ -915,7 +988,7 @@ app.post('/api/analyze', async (req, res) => {
                 }
             }
         } else if (backupAnalyses.length > 0) {
-            // Create ensemble from backup analyses
+            // Create ensemble from backup analyses (keep existing logic)
             const realVotes = backupAnalyses.filter(a => a.label === 'Trustworthy').length;
             const fakeVotes = backupAnalyses.filter(a => a.label === 'Untrustworthy').length;
             const avgConfidence = backupAnalyses.reduce((sum, a) => sum + a.confidence, 0) / backupAnalyses.length;
@@ -931,13 +1004,15 @@ app.post('/api/analyze', async (req, res) => {
                     api_models_used: backupAnalyses.length,
                     local_models_used: 0,
                     predictions: backupAnalyses
-                }
+                },
+                // Generate a backup summary for backup mode
+                summary: `Analysis completed using ${backupAnalyses.length} backup models. ${realVotes > fakeVotes ? 'Content shows trustworthy patterns' : 'Content shows concerning patterns'}. Manual verification recommended.`
             };
         } else {
             throw new Error('All analysis services are currently unavailable');
         }
-        
-        // Optional web verification for additional context
+
+        // Optional web verification (keep existing logic)
         let webVerification = null;
         if (analysisData.title) {
             try {
@@ -964,6 +1039,18 @@ app.post('/api/analyze', async (req, res) => {
             }
         }
         
+        // UPDATED: Use intelligent summary from Python service or generate appropriate fallback
+        let finalSummary;
+        if (finalAnalysis.summary && finalAnalysis.summary.length > 50) {
+            // Use the intelligent summary from Python service
+            finalSummary = finalAnalysis.summary;
+            console.log('✅ Using intelligent analysis-based summary');
+        } else {
+            // Generate a basic fallback summary (not content-copying)
+            finalSummary = generateSummary(analysisData.content, finalAnalysis);
+            console.log('⚠️ Using fallback summary generation');
+        }
+        
         // Format response for frontend
         const result = {
             success: true,
@@ -972,7 +1059,7 @@ app.post('/api/analyze', async (req, res) => {
                 url: analysisData.originalUrl || null,
                 label: finalAnalysis.label,
                 confidence: finalAnalysis.confidence,
-                summary: generateSummary(analysisData.content),
+                summary: finalSummary, // This is now intelligent, not content-copied
                 reasoning: finalAnalysis.reasoning,
                 probabilities: {
                     fake: finalAnalysis.fake_probability || (100 - finalAnalysis.confidence),
@@ -990,25 +1077,27 @@ app.post('/api/analyze', async (req, res) => {
                     total_models_used: (finalAnalysis.ensemble_details?.api_models_used || 0) + 
                                      (finalAnalysis.ensemble_details?.local_models_used || 0),
                     api_models: finalAnalysis.ensemble_details?.api_models_used || 0,
-                    local_models: finalAnalysis.ensemble_details?.local_models_used || 0
+                    local_models: finalAnalysis.ensemble_details?.local_models_used || 0,
+                    intelligent_summary: finalSummary.length > 50 && !finalSummary.startsWith('Content preview:')
                 }
             }
         };
         
         console.log(`📤 COMPREHENSIVE analysis complete: ${finalAnalysis.label} (${finalAnalysis.confidence}% confidence)`);
         console.log(`🎯 Mode: ${result.data.apiUsage.comprehensive_mode ? 'Full Ensemble' : 'Backup APIs'}`);
+        console.log(`📝 Summary type: ${result.data.apiUsage.intelligent_summary ? 'Intelligent Analysis' : 'Fallback'}`);
         
         if (!result.data.label) {
             console.log('🆘 Using emergency fallback response');
             result.data.label = 'Trustworthy';
             result.data.confidence = 65;
             result.data.reasoning = 'Fallback analysis - manual verification recommended';
+            result.data.summary = 'Analysis completed with limited information. Cross-reference with additional sources recommended.';
             result.data.probabilities = {
                 fake: 35,
                 real: 65
             };
         }
-        
         
         res.json(result);
         
@@ -1029,7 +1118,7 @@ app.post('/api/analyze', async (req, res) => {
         });
     }
 });
-
+    
 // COMPREHENSIVE API usage tracking endpoint
 app.get('/api/search-usage', (req, res) => {
     const apis = validateAllAPIs();
