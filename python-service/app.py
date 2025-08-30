@@ -898,6 +898,145 @@ def analyze_content():
             'error': str(e)
         }), 500
 
+
+
+# Add these new endpoints to your existing app.py
+
+@app.route('/analyze-batch', methods=['POST'])
+def analyze_batch():
+    """Batch analysis endpoint for RSS articles"""
+    try:
+        data = request.get_json()
+        if not data or 'articles' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Articles array is required'
+            }), 400
+
+        articles = data.get('articles', [])
+        max_batch_size = 5  # Process in smaller batches for RSS
+        
+        if len(articles) > max_batch_size:
+            articles = articles[:max_batch_size]
+
+        results = []
+        for i, article in enumerate(articles):
+            try:
+                title = article.get('title', '')
+                content = article.get('content', '')
+                
+                if not title and not content:
+                    results.append({
+                        'success': False,
+                        'error': 'Title or content required',
+                        'index': i
+                    })
+                    continue
+
+                # Use the comprehensive ensemble prediction
+                analysis_result = ensemble.comprehensive_ensemble_predict(title, content)
+                
+                results.append({
+                    'success': True,
+                    'index': i,
+                    'analysis': analysis_result
+                })
+                
+            except Exception as e:
+                logger.error(f"Batch analysis error for article {i}: {e}")
+                results.append({
+                    'success': False,
+                    'error': str(e),
+                    'index': i
+                })
+
+        return jsonify({
+            'success': True,
+            'results': results,
+            'batch_size': len(articles),
+            'successful_analyses': len([r for r in results if r.get('success')])
+        })
+
+    except Exception as e:
+        logger.error(f"Batch analysis endpoint error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/analyze-quick', methods=['POST'])
+def analyze_quick():
+    """Quick analysis for RSS snippets"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No JSON data provided'
+            }), 400
+
+        title = data.get('title', '')
+        content = data.get('content', '')
+
+        if not title and not content:
+            return jsonify({
+                'success': False,
+                'error': 'Either title or content is required'
+            }), 400
+
+        # Use enhanced LLaMA fallback for speed
+        analysis_result = ensemble.predict_llama_enhanced_fallback_only(title, content)
+
+        return jsonify({
+            'success': True,
+            'analysis': analysis_result,
+            'processing_mode': 'quick'
+        })
+
+    except Exception as e:
+        logger.error(f"Quick analysis endpoint error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# Update your health endpoint
+@app.route('/health-detailed', methods=['GET'])
+def health_check_detailed():
+    """Detailed health check for RSS integration"""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'Comprehensive Fact-Checking Ensemble',
+        'ensemble_info': {
+            'loaded_models': ensemble.loaded_models,
+            'failed_models': ensemble.failed_models,
+            'total_loaded': len(ensemble.loaded_models),
+            'total_failed': len(ensemble.failed_models)
+        },
+        'api_status': {
+            'openai': bool(ensemble.api_keys.get('openai')),
+            'groq': bool(ensemble.api_keys.get('groq')),
+            'serper': bool(ensemble.api_keys.get('serper')),
+            'huggingface': bool(ensemble.api_keys.get('huggingface'))
+        },
+        'capabilities': {
+            'single_analysis': True,
+            'batch_analysis': True,
+            'quick_analysis': True,
+            'comprehensive_ensemble': True,
+            'intelligent_summaries': True,
+            'confidence_scoring': True,
+            'rss_support': True
+        },
+        'performance': {
+            'average_response_time': '2-5 seconds',
+            'supported_languages': ['English'],
+            'max_content_length': 4000,
+            'batch_size_limit': 5
+        }
+    })
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""

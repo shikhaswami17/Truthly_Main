@@ -87,6 +87,17 @@ const TruthlyApp = () => {
             Verify news, analyze claims, and make informed decisions.
           </p>
 
+          {/* Navigation Section */}
+          <div className="flex gap-4 justify-center mb-8">
+            <button
+              onClick={() => navigate('/search')}
+              className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+            >
+              <Globe className="h-5 w-5" />
+              Browse Trusted News
+            </button>
+            {/* Your existing search interface will follow below */}
+          </div>
           {/* Search Interface */}
           <div className="max-w-4xl mx-auto mb-16">
             <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-8">
